@@ -1,0 +1,40 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="fondo.png">assets/fondos/fondo.png</file>
+        <file alias="terminator.png">assets/personajes/terminator.png</file>
+        <file alias="anciano.png">assets/personajes/anciano.png</file>
+        <file alias="terminator_acelerando_limpio.png">assets/personajes/terminator_acelerando_limpio.png</file>
+        <file alias="terminator_frenando.png">assets/personajes/terminator_frenando.png</file>
+        <file alias="terminator_gameover.png">assets/personajes/terminator_gameover.png</file>
+        <file alias="terminator_perdio1vida.png">assets/personajes/terminator_perdio1vida.png</file>
+        <file alias="terminator_rapidin.png">assets/personajes/terminator_rapidin.png</file>
+        <file alias="anciano2.png">assets/personajes/anciano2.png</file>
+        <file alias="anciano3.png">assets/personajes/anciano3.png</file>
+        <file alias="anciano_preparando_lanzamiento.png">assets/personajes/anciano_preparando_lanzamiento.png</file>
+        <file alias="anciano_pleno_lanzamiento.png">assets/personajes/anciano_pleno_lanzamiento.png</file>
+        <file alias="anciano_ya_lanzo.png">assets/personajes/anciano_ya_lanzo.png</file>
+        <file alias="botella.png">assets/objetos/botella.png</file>
+        <file alias="hueco.png">assets/objetos/hueco.png</file>
+        <file alias="caja.png">assets/objetos/caja.png</file>
+        <file alias="cono.png">assets/objetos/cono.png</file>
+        <file alias="llanta.png">assets/objetos/llanta.png</file>
+        <file alias="premio.png">assets/objetos/premio.png</file>
+        <file alias="carretera.png">assets/escenario/carretera.png</file>
+        <file alias="palmera.png">assets/escenario/palmera.png</file>
+        <file alias="corazon.png">assets/ui/corazon.png</file>
+        <file alias="audio/musica_nivel.wav">assets/audio/musica_nivel.wav</file>
+        <file alias="audio/musica_rapidin.wav">assets/audio/musica_rapidin.wav</file>
+        <file alias="audio/carril.wav">assets/audio/carril.wav</file>
+        <file alias="audio/cuenta.wav">assets/audio/cuenta.wav</file>
+        <file alias="audio/ya.wav">assets/audio/ya.wav</file>
+        <file alias="audio/lanzamiento.wav">assets/audio/lanzamiento.wav</file>
+        <file alias="audio/impacto_botella.wav">assets/audio/impacto_botella.wav</file>
+        <file alias="audio/botella_fallada.wav">assets/audio/botella_fallada.wav</file>
+        <file alias="audio/hueco.wav">assets/audio/hueco.wav</file>
+        <file alias="audio/premio.wav">assets/audio/premio.wav</file>
+        <file alias="audio/rapidin_fin.wav">assets/audio/rapidin_fin.wav</file>
+        <file alias="audio/choque.wav">assets/audio/choque.wav</file>
+        <file alias="audio/victoria.wav">assets/audio/victoria.wav</file>
+        <file alias="audio/derrota.wav">assets/audio/derrota.wav</file>
+    </qresource>
+</RCC>
