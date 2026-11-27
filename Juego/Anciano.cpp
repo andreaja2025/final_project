@@ -1,18 +1,48 @@
 #include "Anciano.h"
-#include "Proyectil.h"
+#include "ObjetosArmas.h"
 
 #include <algorithm>
 #include <cmath>
 
-Anciano::Anciano(double x, double y, double ancho, double alto,
-                 double tiempoEntreLanzamiento)
-    : Entidades(x, y, ancho, alto),
-    tiempoEntreLanzamiento(tiempoEntreLanzamiento),
+Anciano::Anciano()
+    : Entidades(0.0, 0.0, 0.0, 0.0),
+    tiempoEntreLanzamiento(3.5),
     temporizador(0.0), angulo(0.0), velocidadInicial(0.0), tiempoVuelo(1.25),
     velocidadVertical(260.0), alturaSobreCarril(60.0),
-    carrilJugador(1), carrilObjetivo(1), yObjetivo(y), decisionTomada(false),
+    carrilJugador(1), carrilObjetivo(1), yObjetivo(0.0), decisionTomada(false),
     tiempoDesdeLanzamiento(0.0), lanzamientoActivo(false)
 {
+    for (int i = 0; i < 3; ++i) {
+        centroCarril[i] = 0.0;
+        preferencia[i] = 0.0;
+        exito[i] = 0.0;
+    }
+}
+
+void Anciano::reiniciar(double x, double y, double ancho, double alto,
+                        double tiempoEntreLanzamiento)
+{
+    this->x = x;
+    this->y = y;
+    this->ancho = ancho;
+    this->alto = alto;
+    vx = vy = 0.0;
+    activa = true;
+
+    this->tiempoEntreLanzamiento = tiempoEntreLanzamiento;
+    temporizador = 0.0;
+    angulo = 0.0;
+    velocidadInicial = 0.0;
+    tiempoVuelo = 1.25;
+    velocidadVertical = 260.0;
+    alturaSobreCarril = 60.0;
+    carrilJugador = 1;
+    carrilObjetivo = 1;
+    yObjetivo = y;
+    decisionTomada = false;
+    tiempoDesdeLanzamiento = 0.0;
+    lanzamientoActivo = false;
+
     for (int i = 0; i < 3; ++i) {
         centroCarril[i] = y + alto / 2.0;
         preferencia[i] = 0.0;
@@ -56,7 +86,7 @@ double Anciano::puntuacionCarril(int carril) const
 
 void Anciano::decidirCarril()
 {
-    int mejor = carrilJugador;
+    int mejor = std::clamp(carrilJugador, 0, 2);   // siempre entre 0 y 2
     double mejorPuntos = puntuacionCarril(mejor);
 
     for (int i = 0; i < 3; ++i) {
@@ -111,10 +141,10 @@ bool Anciano::listoParaLanzar() const
     return temporizador >= tiempoEntreLanzamiento && estaAlineado();
 }
 
-Proyectil *Anciano::lanzarBotella(double objetivoX, double objetivoY)
+bool Anciano::lanzarBotella(ObjetosArmas *botella, double objetivoX, double objetivoY)
 {
-    if (!listoParaLanzar())
-        return nullptr;
+    if (!botella || !listoParaLanzar())
+        return false;
 
     temporizador = 0.0;
     decisionTomada = false;
@@ -129,16 +159,15 @@ Proyectil *Anciano::lanzarBotella(double objetivoX, double objetivoY)
     const double yInicial = y + alto * 0.4 - altoBotella / 2.0;
 
     // Se apunta con el centro de la botella al centro del objetivo. La parábola la
-    // resuelve el propio Proyectil; el Ángel solo guarda el ángulo y la rapidez elegidos.
-    Proyectil::calcularLanzamiento(
+    // resuelve la propia botella (ObjetosArmas); el Ángel solo guarda el ángulo y la rapidez.
+    ObjetosArmas::calcularLanzamiento(
         xInicial, yInicial,
         objetivoX - anchoBotella / 2.0, objetivoY - altoBotella / 2.0,
         tiempoVuelo, velocidadInicial, angulo);
 
-    Proyectil *botella = new Proyectil(xInicial, yInicial, anchoBotella, altoBotella,
-                                       velocidadInicial, angulo, true, tiempoVuelo + 0.6);
-    botella->setCarrilObjetivo(carrilObjetivo);
-    return botella;
+    botella->crearBotella(xInicial, yInicial, anchoBotella, altoBotella,
+                          velocidadInicial, angulo, tiempoVuelo + 0.6, carrilObjetivo);
+    return true;
 }
 
 void Anciano::registrarResultado(int carril, bool impacto)

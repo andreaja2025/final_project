@@ -25,7 +25,10 @@ private:
     void iniciarRetroceso(double velX, double velY, double duracion);
 
 public:
-    PersonajePrincipal(double x, const double yCarriles[3], double ancho, double alto);
+    PersonajePrincipal();        // Se crea una sola vez (dentro del Nivel); reiniciar() lo deja listo.
+
+    // Deja al personaje como nuevo: vida completa, carril central, sin efectos.
+    void reiniciar(double x, const double yCarriles[3], double ancho, double alto);
 
     void actualizar(double dt) override;
     void CambiarDeCarril(int direccion);

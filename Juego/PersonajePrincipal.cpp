@@ -2,13 +2,36 @@
 #include <algorithm>
 #include <cmath>
 
-PersonajePrincipal::PersonajePrincipal(double x, const double yCarriles[3],
-                                       double ancho, double alto)
-    : Entidades(x, yCarriles[1], ancho, alto),
+PersonajePrincipal::PersonajePrincipal()
+    : Entidades(0.0, 0.0, 0.0, 0.0),
     vida(3), vidaMaxima(3), velocidad(400), carrilActual(1),
-    estado(NORMAL), tiempoEstado(0.0), velocidadYObjetivo(yCarriles[1]),
+    estado(NORMAL), tiempoEstado(0.0), velocidadYObjetivo(0.0),
     vxImpacto(0.0), vyImpacto(0.0), tiempoRetroceso(0.0), enRetroceso(false)
 {
+    for (int i = 0; i < 3; ++i)
+        yCarril[i] = 0.0;
+}
+
+void PersonajePrincipal::reiniciar(double x, const double yCarriles[3],
+                                   double ancho, double alto)
+{
+    this->x = x;
+    this->y = yCarriles[1];
+    this->ancho = ancho;
+    this->alto = alto;
+    vx = vy = 0.0;
+    activa = true;
+
+    vida = vidaMaxima;
+    velocidad = 400;
+    carrilActual = 1;
+    estado = NORMAL;
+    tiempoEstado = 0.0;
+    velocidadYObjetivo = yCarriles[1];
+    vxImpacto = vyImpacto = 0.0;
+    tiempoRetroceso = 0.0;
+    enRetroceso = false;
+
     for (int i = 0; i < 3; ++i)
         yCarril[i] = yCarriles[i];
 }

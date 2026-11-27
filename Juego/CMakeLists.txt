@@ -26,14 +26,10 @@ set(PROJECT_SOURCES
     PersonajePrincipal.cpp
     Anciano.h
     Anciano.cpp
-    Proyectil.h
-    Proyectil.cpp
     ObjetosEstaticos.h
     ObjetosEstaticos.cpp
     ObjetosArmas.h
     ObjetosArmas.cpp
-    Premio.h
-    Premio.cpp
     EventoJuego.h
     GestorAudio.h
     GestorAudio.cpp

@@ -2,7 +2,7 @@
 #define EVENTOJUEGO_H
 
 // Cosas que pasan en el nivel y que la capa de presentación puede querer mostrar
-// (hoy: sonido). Es solo un tipo de dato: no tiene lógica ni depende de Qt.
+// (actualmente: sonido). Es solo un tipo de dato: no tiene lógica ni depende de Qt.
 enum EventoJuego {
     EVENTO_NIVEL_INICIADO,       // el nivel se cargó (también al reiniciar)
     EVENTO_CUENTA_REGRESIVA,     // un número de la cuenta 3-2-1

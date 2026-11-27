@@ -4,8 +4,6 @@
 #include "Anciano.h"
 #include "ObjetosEstaticos.h"
 #include "ObjetosArmas.h"
-#include "Premio.h"
-#include "Proyectil.h"
 #include "GestorAudio.h"
 
 #include <QBrush>
@@ -19,7 +17,6 @@
 #include <QPainter>
 #include <QPen>
 #include <QResizeEvent>
-#include <QSet>
 #include <QShowEvent>
 
 #include <algorithm>
@@ -37,20 +34,33 @@ constexpr int NUM_PALMERAS = 5;
 constexpr double SEPARACION_PALMERAS = 300.0;
 constexpr int NUM_LINEAS = 9;
 
-// Interruptor del sonido. Hoy siempre está activo; en el futuro puede venir de una opción
-// del juego (menú, tecla, archivo de configuración) y se cambia con audio->setActivo(...).
+// Interruptor del sonido siempre está activo; en el futuro puede venir de una opción.
 constexpr bool AUDIO_ACTIVO = true;
 
 constexpr double Z_FONDO = 0, Z_BERMA = 1, Z_CARRETERA = 2, Z_PALMERA = 3,
     Z_ENTIDAD = 10, Z_ANCIANO = 30, Z_BOTELLA = 31,
     Z_LINEAS = 40, Z_HUD = 60, Z_RESULTADO = 80;
+
+// Tiempo máximo de vida de una estrella del choque (segundos).
+constexpr double VIDA_ESTRELLA = 0.42;
+
+// Solo cambia la visibilidad si hace falta (evita invalidar el ítem en cada frame).
+void mostrar(QGraphicsItem *item, bool visible)
+{
+    if (item && item->isVisible() != visible)
+        item->setVisible(visible);
+}
 }
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), ui(new Ui::MainWindow),
     scene(new QGraphicsScene(this)), timer(new QTimer(this)),
+    fondoVerdeBase(nullptr), cieloSuperior(nullptr),
+    bermaSuperior(nullptr), bermaInferior(nullptr),
     fondoA(nullptr), fondoB(nullptr), carreteraItem(nullptr),
-    anchoFondoCompuesto(0.0), jugadorItem(nullptr), ancianoItem(nullptr),
+    anchoFondoCompuesto(0.0), carreteraBaseX(0.0),
+    areaVisibleScene(0.0, 0.0, ANCHO_ESCENA, ALTO_ESCENA),
+    jugadorItem(nullptr), ancianoItem(nullptr),
     panelHud(nullptr), barraFondo(nullptr), barraRelleno(nullptr),
     textoTiempo(nullptr), textoEstado(nullptr), textoRapidin(nullptr),
     textoCuenta(nullptr), textoAyuda(nullptr),
@@ -65,8 +75,12 @@ MainWindow::MainWindow(QWidget *parent)
     // La música empieza sola apenas se crea el gestor de audio.
     audio = new GestorAudio(AUDIO_ACTIVO, this);
 
+    // Casi todo se mueve en cada frame: un índice espacial solo estorba, y repintar la
+    // vista completa es más barato que calcular regiones sucias.
+    scene->setItemIndexMethod(QGraphicsScene::NoIndex);
     scene->setSceneRect(0, 0, ANCHO_ESCENA, ALTO_ESCENA);
     ui->graphicsView->setScene(scene);
+    ui->graphicsView->setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
     ui->graphicsView->installEventFilter(this);
     ui->graphicsView->setFrameShape(QFrame::NoFrame);
     ui->graphicsView->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -168,6 +182,37 @@ void MainWindow::cargarRecursos()
     pxPremio   = cargarEscalado(":/premio.png", 46, 46);
     pxCorazon  = cargarEscalado(":/corazon.png", 36, 36);
     pxPalmera  = cargarEscalado(":/palmera.png", 70, 140);
+
+    // Si falta un recurso de las entidades se usa un rectángulo de color del mismo tamaño,
+    // para que el juego siga siendo jugable (los sprites 1 a 1 siempre son QPixmap).
+    auto conRespaldo = [](QPixmap &px, int ancho, int alto, const QColor &color) {
+        if (!px.isNull())
+            return;
+        px = QPixmap(ancho, alto);
+        px.fill(color);
+    };
+    conRespaldo(pxBotella, 24, 48, QColor(40, 150, 70));
+    conRespaldo(pxHueco, 100, 42, QColor(20, 20, 20));
+    conRespaldo(pxCaja, 64, 64, QColor(180, 120, 60));
+    conRespaldo(pxCono, 46, 62, QColor(240, 120, 30));
+    conRespaldo(pxLlanta, 60, 60, QColor(30, 30, 30));
+    conRespaldo(pxPremio, 46, 46, QColor(255, 210, 40));
+}
+
+const QPixmap &MainWindow::pixmapDeEstatico(TipoObjetoEstatico tipo) const
+{
+    switch (tipo) {
+    case CAJA:   return pxCaja;
+    case CONO:   return pxCono;
+    case LLANTA: return pxLlanta;
+    case PREMIO: return pxPremio;
+    }
+    return pxCaja;
+}
+
+const QPixmap &MainWindow::pixmapDeArma(TipoArma tipo) const
+{
+    return tipo == BOTELLA ? pxBotella : pxHueco;
 }
 
 QPixmap MainWindow::cargarSpriteRecortado(const QString &ruta, int ancho, int alto) const
@@ -218,11 +263,15 @@ void MainWindow::centrarTexto(QGraphicsTextItem *texto, double centroX, double y
 void MainWindow::construirEscenario()
 {
     scene->setBackgroundBrush(QBrush(QColor(74, 98, 38)));
-    scene->addRect(-600, -20, ANCHO_ESCENA + 1200, ALTO_ESCENA + 40, Qt::NoPen, QBrush(QColor(74,98,38)))->setZValue(-100);
+    fondoVerdeBase = scene->addRect(-600, -20, ANCHO_ESCENA + 1200, ALTO_ESCENA + 40,
+                                    Qt::NoPen, QBrush(QColor(74, 98, 38)));
+    fondoVerdeBase->setZValue(-100);
 
     // Paisaje: dos copias (normal + espejada) para que el bucle no tenga costura.
     QImage paisaje(":/fondo.png");
+    QColor colorCielo(70, 56, 86);
     if (!paisaje.isNull()) {
+        colorCielo = paisaje.pixelColor(paisaje.width() / 2, 0);
         const int ancho = qRound(paisaje.width() * ALTO_FONDO / paisaje.height());
         paisaje = paisaje.scaled(ancho, qRound(ALTO_FONDO), Qt::IgnoreAspectRatio,
                                  Qt::SmoothTransformation);
@@ -245,29 +294,34 @@ void MainWindow::construirEscenario()
         qWarning() << "No se pudo cargar :/fondo.png";
     }
 
+    cieloSuperior = scene->addRect(0, -100, ANCHO_ESCENA, 102, Qt::NoPen, QBrush(colorCielo));
+    cieloSuperior->setZValue(-90);
+    cieloSuperior->setVisible(false);
+
     // Bermas (franjas de tierra/hierba sobre y bajo la carretera).
-    auto *bermaSuperior = scene->addRect(0, ALTO_FONDO, ANCHO_ESCENA, Y_CARRETERA - ALTO_FONDO,
-                                         QPen(Qt::NoPen), QBrush(QColor(98, 122, 48)));
-    auto *bermaInferior = scene->addRect(0, Y_CARRETERA + ALTO_CARRETERA, ANCHO_ESCENA,
-                                         ALTO_ESCENA - Y_CARRETERA - ALTO_CARRETERA,
-                                         QPen(Qt::NoPen), QBrush(QColor(74, 98, 38)));
+    bermaSuperior = scene->addRect(0, ALTO_FONDO, ANCHO_ESCENA, Y_CARRETERA - ALTO_FONDO,
+                                   QPen(Qt::NoPen), QBrush(QColor(98, 122, 48)));
+    bermaInferior = scene->addRect(0, Y_CARRETERA + ALTO_CARRETERA, ANCHO_ESCENA,
+                                   ALTO_ESCENA - Y_CARRETERA - ALTO_CARRETERA,
+                                   QPen(Qt::NoPen), QBrush(QColor(74, 98, 38)));
     bermaSuperior->setZValue(Z_BERMA);
     bermaInferior->setZValue(Z_BERMA);
 
     // Carretera: mosaico horizontal (asfalto + separadores discontinuos).
-    const QPixmap tesela(":/carretera.png");
-    QPixmap carretera(int(ANCHO_ESCENA + 2 * ANCHO_TESELA), int(ALTO_CARRETERA));
+    teselaCarretera = QPixmap(":/carretera.png");
+    carreteraBaseX = -ANCHO_TESELA;
+    QPixmap carretera(int(ANCHO_ESCENA + 3 * ANCHO_TESELA), int(ALTO_CARRETERA));
     carretera.fill(QColor(48, 50, 58));
-    if (!tesela.isNull()) {
+    if (!teselaCarretera.isNull()) {
         QPainter pintor(&carretera);
-        pintor.drawTiledPixmap(carretera.rect(), tesela);
+        pintor.drawTiledPixmap(carretera.rect(), teselaCarretera);
         pintor.end();
     } else {
         qWarning() << "No se pudo cargar :/carretera.png";
         carretera.fill(QColor(60, 60, 66));
     }
     carreteraItem = scene->addPixmap(carretera);
-    carreteraItem->setPos(0, Y_CARRETERA);
+    carreteraItem->setPos(carreteraBaseX, Y_CARRETERA);
     carreteraItem->setZValue(Z_CARRETERA);
 
     // Palmeras junto a la carretera (decoración con movimiento más rápido: profundidad).
@@ -291,6 +345,26 @@ void MainWindow::construirEscenario()
     jugadorItem->setZValue(Z_ENTIDAD + 1);
     ancianoItem = crearSprite(pxAnciano, 150, 150, QColor(230, 230, 230));
     ancianoItem->setZValue(Z_ANCIANO);
+
+    // Un sprite por casilla del Nivel, creado una sola vez y oculto hasta que la casilla se active.
+    for (int i = 0; i < Nivel::MAX_ESTATICOS; ++i) {
+        graficosEstaticos[i] = scene->addPixmap(QPixmap());
+        graficosEstaticos[i]->setVisible(false);
+    }
+    for (int i = 0; i < Nivel::MAX_ARMAS; ++i) {
+        graficosArmas[i] = scene->addPixmap(QPixmap());
+        graficosArmas[i]->setVisible(false);
+    }
+
+    // Estrellas del choque: se crean una vez y se reciclan.
+    for (int i = 0; i < MAX_ESTRELLAS; ++i) {
+        auto *estrella = scene->addPolygon(QPolygonF(), QPen(QColor(255, 235, 150), 1),
+                                           QBrush(QColor(255, 190, 45)));
+        estrella->setZValue(95);
+        estrella->setVisible(false);
+        estrellas[i].item = estrella;
+        estrellas[i].vida = 0.0;
+    }
 }
 
 void MainWindow::construirHud()
@@ -328,6 +402,9 @@ void MainWindow::construirHud()
 
     textoAyuda = crearTexto(18, Qt::white, true);
     textoAyuda->setZValue(Z_HUD + 3);
+    // El mensaje de ayuda nunca cambia: se escribe y se centra una sola vez.
+    textoAyuda->setPlainText("¡Prepárate!  W = carril superior   S = carril inferior");
+    centrarTexto(textoAyuda, ANCHO_ESCENA / 2.0, 270);
 }
 
 void MainWindow::construirResultado()
@@ -365,34 +442,44 @@ void MainWindow::crearEfectoColision(bool fatal)
     if (!jugador) return;
     const QPointF centro(jugador->getCentroX(), jugador->getY()+jugador->getAlto()/2.0);
     const int cantidad = fatal ? 12 : 7;
-    for (int i=0; i<cantidad; ++i) {
-        QPolygonF forma;
-        const double radio = fatal ? 8.0 : 6.0;
-        for (int k=0; k<10; ++k) {
-            const double a=-1.57079632679+k*3.14159265359/5.0;
-            const double rr=(k%2==0)?radio:radio*0.42;
-            forma << QPointF(std::cos(a)*rr,std::sin(a)*rr);
-        }
-        auto *estrella=scene->addPolygon(forma,QPen(QColor(255,235,150),1),
-                                           QBrush(QColor(255,190,45)));
-        estrella->setPos(centro);
-        estrella->setZValue(95);
-        const double ang=6.28318530718*i/cantidad;
-        estrellasColision.append({estrella,QPointF(std::cos(ang)*105.0,
-                                                    std::sin(ang)*85.0),0.42});
+
+    // La forma de la estrella es la misma para todas: se calcula una sola vez.
+    QPolygonF forma;
+    const double radio = fatal ? 8.0 : 6.0;
+    for (int k=0; k<10; ++k) {
+        const double a=-1.57079632679+k*3.14159265359/5.0;
+        const double rr=(k%2==0)?radio:radio*0.42;
+        forma << QPointF(std::cos(a)*rr,std::sin(a)*rr);
+    }
+
+    // Se reciclan las estrellas libres (vida <= 0); si no quedan, el efecto sale con menos.
+    int usadas = 0;
+    for (int i=0; i<MAX_ESTRELLAS && usadas<cantidad; ++i) {
+        EstrellaVisual &estrella = estrellas[i];
+        if (estrella.vida > 0.0) continue;
+        const double ang=6.28318530718*usadas/cantidad;
+        estrella.item->setPolygon(forma);
+        estrella.item->setPos(centro);
+        estrella.item->setOpacity(1.0);
+        estrella.item->setVisible(true);
+        estrella.velocidad=QPointF(std::cos(ang)*105.0,std::sin(ang)*85.0);
+        estrella.vida=VIDA_ESTRELLA;
+        ++usadas;
     }
 }
 
 void MainWindow::actualizarEfectosColision(double dt)
 {
-    for (auto it=estrellasColision.begin(); it!=estrellasColision.end();) {
-        it->vida-=dt;
-        it->item->moveBy(it->velocidad.x()*dt,it->velocidad.y()*dt);
-        it->item->setOpacity(std::max(0.0,it->vida/0.42));
-        if (it->vida<=0.0) {
-            scene->removeItem(it->item); delete it->item;
-            it=estrellasColision.erase(it);
-        } else ++it;
+    for (int i=0; i<MAX_ESTRELLAS; ++i) {
+        EstrellaVisual &estrella = estrellas[i];
+        if (estrella.vida <= 0.0) continue;
+        estrella.vida-=dt;
+        if (estrella.vida<=0.0) {
+            estrella.item->setVisible(false);      // casilla libre para el próximo choque
+            continue;
+        }
+        estrella.item->moveBy(estrella.velocidad.x()*dt,estrella.velocidad.y()*dt);
+        estrella.item->setOpacity(estrella.vida/VIDA_ESTRELLA);
     }
 }
 
@@ -452,6 +539,79 @@ void MainWindow::ajustarVista()
     ui->graphicsView->setTransformationAnchor(QGraphicsView::AnchorViewCenter);
     ui->graphicsView->setResizeAnchor(QGraphicsView::AnchorViewCenter);
     ui->graphicsView->fitInView(scene->sceneRect(), Qt::KeepAspectRatio);
+    adaptarEscenarioAVista();
+}
+
+void MainWindow::adaptarEscenarioAVista()
+{
+    if (!ui->graphicsView || !ui->graphicsView->viewport() || !scene)
+        return;
+
+    QRectF vis = ui->graphicsView->mapToScene(ui->graphicsView->viewport()->rect()).boundingRect();
+    if (vis.isEmpty() || vis.width() <= 0.0 || vis.height() <= 0.0)
+        vis = scene->sceneRect();
+    areaVisibleScene = vis;
+
+    const double izq = std::min(0.0, vis.left()) - 64.0;
+    const double der = std::max(ANCHO_ESCENA, vis.right()) + 64.0;
+    const double arriba = std::min(0.0, vis.top()) - 64.0;
+    const double abajo = std::max(ALTO_ESCENA, vis.bottom()) + 64.0;
+    const double anchoTotal = der - izq;
+
+    if (fondoVerdeBase)
+        fondoVerdeBase->setRect(izq, arriba, anchoTotal, abajo - arriba);
+
+    if (cieloSuperior) {
+        if (vis.top() < 0.0) {
+            cieloSuperior->setRect(izq, arriba, anchoTotal, -arriba + 2.0);
+            cieloSuperior->setVisible(true);
+        } else {
+            cieloSuperior->setVisible(false);
+        }
+    }
+
+    if (bermaSuperior)
+        bermaSuperior->setRect(izq, ALTO_FONDO, anchoTotal, Y_CARRETERA - ALTO_FONDO);
+    if (bermaInferior)
+        bermaInferior->setRect(izq, Y_CARRETERA + ALTO_CARRETERA,
+                               anchoTotal, abajo - (Y_CARRETERA + ALTO_CARRETERA));
+
+    // Mantener siempre >= 1 tesela completa a la izquierda del borde visible y >= 1 a la derecha.
+    carreteraBaseX = std::floor(vis.left() / ANCHO_TESELA) * ANCHO_TESELA - ANCHO_TESELA;
+    const double anchoNecesario = (der - carreteraBaseX) + 2.0 * ANCHO_TESELA;
+    const int numTeselas = std::max(8, int(std::ceil(anchoNecesario / ANCHO_TESELA)));
+    const int anchoReq = numTeselas * int(ANCHO_TESELA);
+
+    if (carreteraItem && carreteraItem->pixmap().width() < anchoReq) {
+        QPixmap carretera(anchoReq, int(ALTO_CARRETERA));
+        carretera.fill(QColor(48, 50, 58));
+        if (!teselaCarretera.isNull()) {
+            QPainter pintor(&carretera);
+            pintor.drawTiledPixmap(carretera.rect(), teselaCarretera);
+            pintor.end();
+        } else {
+            carretera.fill(QColor(60, 60, 66));
+        }
+        carreteraItem->setPixmap(carretera);
+    }
+
+    // Asegura suficientes palmeras si la pantalla es más ancha que el escenario base.
+    const double anchoPalmas = std::max(NUM_PALMERAS * SEPARACION_PALMERAS,
+                                        anchoTotal + 2.0 * SEPARACION_PALMERAS);
+    const int palmasRequeridas = std::max(NUM_PALMERAS, int(std::ceil(anchoPalmas / SEPARACION_PALMERAS)));
+    while (palmeras.size() < palmasRequeridas) {
+        QGraphicsItem *palma = crearSprite(pxPalmera, 70, 140, QColor(30, 120, 40));
+        palma->setZValue(Z_PALMERA);
+        palmeras.append(palma);
+    }
+
+    if (panelHud)
+        panelHud->setRect(izq, arriba, anchoTotal, 70.0 - arriba);
+    if (overlay)
+        overlay->setRect(izq, arriba, anchoTotal, abajo - arriba);
+
+    actualizarEscenario(0.0);
+    sincronizarHud();
 }
 
 void MainWindow::reiniciarPartida()
@@ -459,16 +619,15 @@ void MainWindow::reiniciarPartida()
     juego.iniciar(); // Nivel::cargar() deja jugador, ángel, objetos y tiempos en limpio.
     estadoAnterior = PREPARACION; tiempoImpacto = 0.0;
 
-    for (auto it = itemsEntidades.begin(); it != itemsEntidades.end(); ++it) {
-        scene->removeItem(it.value());
-        delete it.value();
+    // Los sprites no se destruyen: solo se ocultan hasta que sus casillas vuelvan a activarse.
+    for (int i = 0; i < Nivel::MAX_ESTATICOS; ++i)
+        graficosEstaticos[i]->setVisible(false);
+    for (int i = 0; i < Nivel::MAX_ARMAS; ++i)
+        graficosArmas[i]->setVisible(false);
+    for (int i = 0; i < MAX_ESTRELLAS; ++i) {
+        estrellas[i].vida = 0.0;
+        estrellas[i].item->setVisible(false);
     }
-    itemsEntidades.clear();
-    for (auto &estrella : estrellasColision) {
-        scene->removeItem(estrella.item);
-        delete estrella.item;
-    }
-    estrellasColision.clear();
 
     scrollRuta = 0.0;
     tiempoParpadeo = 0.0;
@@ -486,12 +645,14 @@ void MainWindow::actualizarJuego()
     tiempoAnimacion += dt;
 
     // El nivel informa qué pasó (colisiones, premios, fin...) y el audio lo convierte en sonido.
-    for (const EventoJuego evento : juego.getNivel().tomarEventos())
-        audio->procesarEvento(evento);
+    Nivel &nivel = juego.getNivel();
+    for (int i = 0; i < nivel.getNumEventos(); ++i)
+        audio->procesarEvento(nivel.getEvento(i));
+    nivel.limpiarEventos();
 
     actualizarEfectosColision(dt);
     actualizarEscenario(dt);
-    sincronizarJugador();
+    sincronizarJugador(dt);
     sincronizarAnciano();
     sincronizarEntidades();
     sincronizarHud();
@@ -507,42 +668,49 @@ void MainWindow::actualizarEscenario(double dt)
     if (enMarcha)
         scrollRuta += nivel.getVelocidadScroll() * dt;
 
-    // Carretera: desplazamiento cíclico del mosaico.
+    // Carretera: desplazamiento cíclico del mosaico adaptado al borde visible.
     if (carreteraItem)
-        carreteraItem->setX(-std::fmod(scrollRuta, ANCHO_TESELA));
+        carreteraItem->setX(carreteraBaseX - std::fmod(scrollRuta, ANCHO_TESELA));
 
-    // Paisaje con paralaje.
-    if (fondoA && fondoB) {
-        const double desplazamiento = std::fmod(scrollRuta * PARALAJE_FONDO, anchoFondoCompuesto);
-        fondoA->setPos(-desplazamiento, 0);
-        fondoB->setPos(-desplazamiento + anchoFondoCompuesto, 0);
+    // Paisaje con paralaje sin costuras incluso en x < 0.
+    if (fondoA && fondoB && anchoFondoCompuesto > 0.0) {
+        const double base = -std::fmod(scrollRuta * PARALAJE_FONDO, anchoFondoCompuesto);
+        const double k = std::floor((areaVisibleScene.left() - base) / anchoFondoCompuesto);
+        const double x0 = base + k * anchoFondoCompuesto;
+        fondoA->setPos(x0, 0);
+        fondoB->setPos(x0 + anchoFondoCompuesto, 0);
     }
 
     // Palmeras.
-    const double vuelta = NUM_PALMERAS * SEPARACION_PALMERAS;
+    const double xInicioPalmas = std::min(0.0, areaVisibleScene.left()) - 100.0;
+    const double vuelta = std::max(1, int(palmeras.size())) * SEPARACION_PALMERAS;
     for (int i = 0; i < palmeras.size(); ++i) {
-        double x = std::fmod(i * SEPARACION_PALMERAS - scrollRuta, vuelta);
+        double x = std::fmod(i * SEPARACION_PALMERAS - scrollRuta - xInicioPalmas, vuelta);
         if (x < 0)
             x += vuelta;
-        palmeras[i]->setPos(x - 100.0, Y_CARRETERA - 8.0 - palmeras[i]->boundingRect().height()
-                                           + 10.0 * (i % 2));
+        palmeras[i]->setPos(xInicioPalmas + x,
+                            Y_CARRETERA - 8.0 - palmeras[i]->boundingRect().height()
+                                + 10.0 * (i % 2));
     }
 
     // Líneas de velocidad (solo con el premio activo).
-    PersonajePrincipal *jugador = nivel.getJugador();
+    const PersonajePrincipal *jugador = nivel.getJugador();
     const bool rapidin = enMarcha && jugador && jugador->getEstado() == RAPIDIN;
+    const double xInicioLineas = std::min(0.0, areaVisibleScene.left()) - 120.0;
+    const double xFinLineas = std::max(ANCHO_ESCENA, areaVisibleScene.right()) + 120.0;
+    const double vueltaLineas = std::max(1400.0, xFinLineas - xInicioLineas);
     for (int i = 0; i < lineasVelocidad.size(); ++i) {
         lineasVelocidad[i]->setVisible(rapidin);
         if (rapidin) {
-            double x = std::fmod(i * 173.0 - scrollRuta * 1.8, 1400.0);
+            double x = std::fmod(i * 173.0 - scrollRuta * 1.8 - xInicioLineas, vueltaLineas);
             if (x < 0)
-                x += 1400.0;
-            lineasVelocidad[i]->setX(x - 120.0);
+                x += vueltaLineas;
+            lineasVelocidad[i]->setX(xInicioLineas + x);
         }
     }
 }
 
-void MainWindow::sincronizarJugador()
+void MainWindow::sincronizarJugador(double dt)
 {
     PersonajePrincipal *jugador = juego.getNivel().getJugador();
     if (!jugador || !jugadorItem)
@@ -560,7 +728,7 @@ void MainWindow::sincronizarJugador()
     const double y = jugador->getY() + jugador->getAlto() + 14.0 - r.height() + vibracion;
     jugadorItem->setPos(x, y);
 
-    // Inclinación al cambiar de carril (el morro baja o sube según el movimiento).
+    // Inclinación al cambiar de carril.
     const double restante = jugador->getYCarril(jugador->getCarril()) - jugador->getY();
     jugadorItem->setTransformOriginPoint(r.center());
     const double inclinacionChoque = jugador->estaEnRetroceso() ? -18.0 : 0.0;
@@ -585,7 +753,7 @@ void MainWindow::sincronizarJugador()
     }
     if (!jugador->estaEnRetroceso()) efectoChoqueActivo = false;
 
-    if (tiempoImpacto > 0.0) tiempoImpacto -= 0.016;
+    if (tiempoImpacto > 0.0) tiempoImpacto -= dt;
     QPixmap sprite = pxTerminator;
     if (estadoNivel == PERDIDO || !jugador->estaActiva()) sprite = pxTerminatorGameOver;
     else if (jugador->estaEnRetroceso()) sprite = pxTerminatorPerdioVida;
@@ -595,11 +763,13 @@ void MainWindow::sincronizarJugador()
         else if (jugador->getTiempoEstado() < 0.85) sprite = pxTerminatorFrenando;
         else sprite = pxTerminatorRapidin;
     }
-    if (auto *pix = dynamic_cast<QGraphicsPixmapItem*>(jugadorItem))
-        if (!sprite.isNull()) pix->setPixmap(sprite);
+    // Solo se cambia el sprite si realmente es otro (cacheKey identifica la imagen).
+    if (auto *pix = qgraphicsitem_cast<QGraphicsPixmapItem*>(jugadorItem))
+        if (!sprite.isNull() && pix->pixmap().cacheKey() != sprite.cacheKey())
+            pix->setPixmap(sprite);
 
     if (tiempoParpadeo > 0.0) {
-        tiempoParpadeo -= 0.016;
+        tiempoParpadeo -= dt;
         jugadorItem->setOpacity(std::fmod(tiempoParpadeo * 12.0, 2.0) < 1.0 ? 0.3 : 1.0);
     } else {
         jugadorItem->setOpacity(1.0);
@@ -621,8 +791,8 @@ void MainWindow::sincronizarAnciano()
         const int fase=static_cast<int>(tiempoAnimacion/0.18)%3;
         frame=(fase==0?pxAnciano:(fase==1?pxAnciano2:pxAnciano3));
     }
-    if(auto *pix=dynamic_cast<QGraphicsPixmapItem*>(ancianoItem))
-        if(!frame.isNull()) pix->setPixmap(frame);
+    if(auto *pix=qgraphicsitem_cast<QGraphicsPixmapItem*>(ancianoItem))
+        if(!frame.isNull() && pix->pixmap().cacheKey()!=frame.cacheKey()) pix->setPixmap(frame);
     const double aleteo=std::sin(tiempoAnimacion*7.0);
     ancianoItem->setPos(anciano->getCentroX()-r.width()/2.0,
                         anciano->getCentroY()-r.height()/2.0+aleteo*3.0);
@@ -630,63 +800,64 @@ void MainWindow::sincronizarAnciano()
     ancianoItem->setRotation(aleteo*1.5);
 }
 
+// Cada casilla del Nivel tiene su sprite (mismo índice). Casilla activa = sprite visible y
+// colocado; casilla libre = sprite oculto. No se crea ni se destruye ningún QGraphicsItem.
 void MainWindow::sincronizarEntidades()
 {
-    const auto &entidades = juego.getNivel().getEntidades();
-    QSet<const Entidades*> vigentes;
+    const Nivel &nivel = juego.getNivel();
 
-    for (const Entidades *entidad : entidades) {
-        if (!entidad || !entidad->estaActiva())
+    for (int i = 0; i < Nivel::MAX_ESTATICOS; ++i) {
+        const ObjetosEstaticos &objeto = nivel.getEstatico(i);
+        QGraphicsPixmapItem *grafico = graficosEstaticos[i];
+
+        if (!objeto.estaActiva()) {
+            mostrar(grafico, false);
             continue;
-        vigentes.insert(entidad);
-
-        QGraphicsItem *item = itemsEntidades.value(entidad, nullptr);
-        if (!item) {
-            if (const auto *obst = dynamic_cast<const ObjetosEstaticos*>(entidad)) {
-                switch (obst->getTipo()) {
-                case CAJA:   item = crearSprite(pxCaja, 64, 64, QColor(180, 120, 60)); break;
-                case CONO:   item = crearSprite(pxCono, 46, 62, QColor(240, 120, 30)); break;
-                case LLANTA: item = crearSprite(pxLlanta, 60, 60, QColor(30, 30, 30)); break;
-                }
-            } else if (const auto *proyectil = dynamic_cast<const Proyectil*>(entidad)) {
-                if (proyectil->esBotella())
-                    item = crearSprite(pxBotella, 24, 48, QColor(40, 150, 70));
-            } else if (dynamic_cast<const ObjetosArmas*>(entidad)) {
-                item = crearSprite(pxHueco, 100, 42, QColor(20, 20, 20));
-            } else if (dynamic_cast<const Premio*>(entidad)) {
-                item = crearSprite(pxPremio, 46, 46, QColor(255, 210, 40));
-            }
-
-            if (!item)
-                continue;
-            item->setTransformOriginPoint(item->boundingRect().center());
-            itemsEntidades.insert(entidad, item);
         }
 
-        const QRectF r = item->boundingRect();
-        item->setPos(entidad->getCentroX() - r.width() / 2.0,
-                     entidad->getCentroY() - r.height() / 2.0);
-
-        if (dynamic_cast<const Proyectil*>(entidad)) {
-            item->setZValue(Z_BOTELLA);
-            item->setRotation(tiempoAnimacion * 520.0);         // La botella gira en el aire.
-        } else if (dynamic_cast<const Premio*>(entidad)) {
-            item->setZValue(Z_ENTIDAD + entidad->getCentroY() / 1000.0);
-            item->setScale(1.0 + 0.10 * std::sin(tiempoAnimacion * 8.0));
-        } else {
-            // Los objetos de carriles inferiores se dibujan encima de los superiores.
-            item->setZValue(Z_ENTIDAD + entidad->getCentroY() / 1000.0);
+        if (!grafico->isVisible()) {
+            // Acaba de activarse: se le da su imagen (puede ser otro tipo que la vez anterior).
+            grafico->setPixmap(pixmapDeEstatico(objeto.getTipo()));
+            grafico->setTransformOriginPoint(grafico->boundingRect().center());
+            grafico->setRotation(0.0);
+            grafico->setScale(1.0);
+            grafico->setVisible(true);
         }
+
+        const QRectF r = grafico->boundingRect();
+        grafico->setPos(objeto.getCentroX() - r.width() / 2.0,
+                        objeto.getCentroY() - r.height() / 2.0);
+        // Los objetos de carriles inferiores se dibujan encima de los superiores.
+        grafico->setZValue(Z_ENTIDAD + objeto.getCentroY() / 1000.0);
+        if (objeto.esPremio())
+            grafico->setScale(1.0 + 0.10 * std::sin(tiempoAnimacion * 8.0));   // el premio "late"
     }
 
-    // Elimina los gráficos de entidades que ya no existen.
-    for (auto it = itemsEntidades.begin(); it != itemsEntidades.end(); ) {
-        if (!vigentes.contains(it.key())) {
-            scene->removeItem(it.value());
-            delete it.value();
-            it = itemsEntidades.erase(it);
+    for (int i = 0; i < Nivel::MAX_ARMAS; ++i) {
+        const ObjetosArmas &arma = nivel.getArma(i);
+        QGraphicsPixmapItem *grafico = graficosArmas[i];
+
+        if (!arma.estaActiva()) {
+            mostrar(grafico, false);
+            continue;
+        }
+
+        if (!grafico->isVisible()) {
+            grafico->setPixmap(pixmapDeArma(arma.getTipo()));
+            grafico->setTransformOriginPoint(grafico->boundingRect().center());
+            grafico->setRotation(0.0);
+            grafico->setScale(1.0);
+            grafico->setVisible(true);
+        }
+
+        const QRectF r = grafico->boundingRect();
+        grafico->setPos(arma.getCentroX() - r.width() / 2.0,
+                        arma.getCentroY() - r.height() / 2.0);
+        if (arma.esBotella()) {
+            grafico->setZValue(Z_BOTELLA);
+            grafico->setRotation(tiempoAnimacion * 520.0);      // La botella gira en el aire.
         } else {
-            ++it;
+            grafico->setZValue(Z_ENTIDAD + arma.getCentroY() / 1000.0);
         }
     }
 }
@@ -697,63 +868,92 @@ void MainWindow::sincronizarHud()
     const PersonajePrincipal *jugador = nivel.getJugador();
     const EstadoNivel estado = nivel.getEstado();
 
-    // Vidas.
+    // Vidas: los corazones solo se tocan si cambian las vidas o el borde izquierdo visible.
+    const double bordeIzqHud = std::min(0.0, areaVisibleScene.left());
+    const double bordeDerHud = std::max(ANCHO_ESCENA, areaVisibleScene.right());
     const int vidas = jugador ? jugador->getVida() : 0;
-    for (int i = 0; i < corazones.size(); ++i)
-        corazones[i]->setOpacity(i < vidas ? 1.0 : 0.2);
+    if (vidas != vidasMostradas || bordeIzqHud != bordeIzqMostrado) {
+        vidasMostradas = vidas;
+        bordeIzqMostrado = bordeIzqHud;
+        for (int i = 0; i < corazones.size(); ++i) {
+            corazones[i]->setPos(bordeIzqHud + 20.0 + i * 44.0, 17.0);
+            corazones[i]->setOpacity(i < vidas ? 1.0 : 0.2);
+        }
+    }
 
-    // Tiempo restante y barra de progreso.
+    // Tiempo restante: el texto se rehace solo cuando cambia el segundo mostrado.
     const double duracion = nivel.getDuracionNivel();
     const double restante = std::max(0.0, duracion - nivel.getTiempo());
-    textoTiempo->setPlainText(QString("Tiempo restante: %1 s").arg(int(std::ceil(restante))));
-    centrarTexto(textoTiempo, ANCHO_ESCENA / 2.0, 8);
-    barraRelleno->setRect(0, 0, 420.0 * std::min(1.0, nivel.getTiempo() / duracion), 10);
-
-    // Estado del nivel.
-    QString etiqueta;
-    switch (estado) {
-    case PREPARACION: etiqueta = "Preparación"; break;
-    case JUGANDO:     etiqueta = "En ruta a Macondo"; break;
-    case COMPLETADO:  etiqueta = "Nivel completado"; break;
-    case PERDIDO:     etiqueta = "Nivel perdido"; break;
+    const int segundos = int(std::ceil(restante));
+    if (segundos != segundosMostrados) {
+        segundosMostrados = segundos;
+        textoTiempo->setPlainText(QString("Tiempo restante: %1 s").arg(segundos));
+        centrarTexto(textoTiempo, ANCHO_ESCENA / 2.0, 8);
     }
-    textoEstado->setPlainText(etiqueta);
-    textoEstado->setPos(ANCHO_ESCENA - textoEstado->boundingRect().width() - 20, 20);
 
-    // Premio rapidín.
+    // Barra de progreso: solo si cambia en píxeles enteros.
+    const int anchoBarra = int(420.0 * std::min(1.0, nivel.getTiempo() / duracion));
+    if (anchoBarra != anchoBarraMostrado) {
+        anchoBarraMostrado = anchoBarra;
+        barraRelleno->setRect(0, 0, anchoBarra, 10);
+    }
+
+    // Estado del nivel (y su posición, que depende del borde derecho visible).
+    if (int(estado) != estadoMostrado || bordeDerHud != bordeDerMostrado) {
+        estadoMostrado = int(estado);
+        bordeDerMostrado = bordeDerHud;
+        QString etiqueta;
+        switch (estado) {
+        case PREPARACION: etiqueta = "Preparación"; break;
+        case JUGANDO:     etiqueta = "En ruta a Macondo"; break;
+        case COMPLETADO:  etiqueta = "Nivel completado"; break;
+        case PERDIDO:     etiqueta = "Nivel perdido"; break;
+        }
+        textoEstado->setPlainText(etiqueta);
+        textoEstado->setPos(bordeDerHud - textoEstado->boundingRect().width() - 20.0, 20.0);
+    }
+
+    // Premio rapidín: el texto cambia cada décima de segundo.
     const bool rapidin = estado == JUGANDO && jugador && jugador->getEstado() == RAPIDIN;
-    textoRapidin->setVisible(rapidin);
+    mostrar(textoRapidin, rapidin);
     if (rapidin) {
-        textoRapidin->setPlainText(QString("¡RAPIDÍN!  %1 s")
-                                       .arg(jugador->getTiempoEstado(), 0, 'f', 1));
-        centrarTexto(textoRapidin, ANCHO_ESCENA / 2.0, 78);
-    }
-
-    // Cuenta regresiva y mensaje "¡YA!".
-    if (estado == PREPARACION) {
-        textoCuenta->setVisible(true);
-        textoCuenta->setPlainText(QString::number(
-            std::max(1, int(std::ceil(nivel.getTiempoPreparacion())))));
-        centrarTexto(textoCuenta, ANCHO_ESCENA / 2.0, 120);
-
-        textoAyuda->setVisible(true);
-        textoAyuda->setPlainText("¡Prepárate!  W = carril superior   S = carril inferior");
-        centrarTexto(textoAyuda, ANCHO_ESCENA / 2.0, 270);
-    } else if (estado == JUGANDO && nivel.getTiempo() < 0.9) {
-        textoCuenta->setVisible(true);
-        textoCuenta->setPlainText("¡YA!");
-        centrarTexto(textoCuenta, ANCHO_ESCENA / 2.0, 120);
-        textoAyuda->setVisible(false);
+        const int decimas = qRound(jugador->getTiempoEstado() * 10.0);
+        if (decimas != decimasRapidinMostradas) {
+            decimasRapidinMostradas = decimas;
+            textoRapidin->setPlainText(QString("¡RAPIDÍN!  %1 s").arg(decimas / 10.0, 0, 'f', 1));
+            centrarTexto(textoRapidin, ANCHO_ESCENA / 2.0, 78);
+        }
     } else {
-        textoCuenta->setVisible(false);
-        textoAyuda->setVisible(false);
+        decimasRapidinMostradas = -1;
     }
+
+    // Cuenta regresiva y mensaje "¡YA!": 0 = oculto, 1..3 = número, 100 = "¡YA!".
+    int cuenta = 0;
+    if (estado == PREPARACION)
+        cuenta = std::max(1, int(std::ceil(nivel.getTiempoPreparacion())));
+    else if (estado == JUGANDO && nivel.getTiempo() < 0.9)
+        cuenta = 100;
+
+    if (cuenta != cuentaMostrada) {
+        cuentaMostrada = cuenta;
+        mostrar(textoCuenta, cuenta != 0);
+        if (cuenta != 0) {
+            textoCuenta->setPlainText(cuenta == 100 ? QString("¡YA!") : QString::number(cuenta));
+            centrarTexto(textoCuenta, ANCHO_ESCENA / 2.0, 120);
+        }
+    }
+    mostrar(textoAyuda, estado == PREPARACION);
 }
 
 void MainWindow::sincronizarResultado()
 {
     const Nivel &nivel = juego.getNivel();
     const bool terminado = nivel.getEstado() == COMPLETADO || nivel.getEstado() == PERDIDO;
+
+    // Solo se actúa cuando la pantalla de resultado aparece o desaparece.
+    if (terminado == resultadoVisible)
+        return;
+    resultadoVisible = terminado;
 
     overlay->setVisible(terminado);
     panelResultado->setVisible(terminado);

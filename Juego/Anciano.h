@@ -3,10 +3,9 @@
 
 #include "Entidades.h"
 
-class Proyectil;
+class ObjetosArmas;
 
-// Ángel del Nivel 1 ("un anciano con alas enormes"). Es un agente autónomo
-// sencillo:
+// Ángel del Nivel 1 (un anciano con alas enormes agente autónomo sencillo):
 //   Percepción:  detecta el carril de Terminator (percibir).
 //   Razonamiento: decide a qué carril alinearse/apuntar (decidirCarril).
 //   Acción:      se desplaza verticalmente y lanza botellas parabólicas.
@@ -37,8 +36,11 @@ private:
     double puntuacionCarril(int carril) const;
 
 public:
-    Anciano(double x, double y, double ancho, double alto,
-            double tiempoEntreLanzamiento);
+    Anciano();                   // Se crea una sola vez (dentro del Nivel); reiniciar() lo deja listo.
+
+    // Deja al Ángel como nuevo: sin memoria de lo que "aprendió" en la partida anterior.
+    void reiniciar(double x, double y, double ancho, double alto,
+                   double tiempoEntreLanzamiento);
 
     void actualizar(double dt) override;
 
@@ -48,7 +50,9 @@ public:
 
     bool estaAlineado() const;
     bool listoParaLanzar() const;
-    Proyectil *lanzarBotella(double objetivoX, double objetivoY);
+    // Configura 'botella' (una casilla libre del Nivel) como una botella lanzada hacia el
+    // objetivo. Devuelve false si todavía no es el momento de lanzar.
+    bool lanzarBotella(ObjetosArmas *botella, double objetivoX, double objetivoY);
     void registrarResultado(int carril, bool impacto);
 
     void setTiempoEntreLanzamiento(double segundos);
