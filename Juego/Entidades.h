@@ -4,6 +4,10 @@
 // Clase base de todas las entidades del juego. Las coordenadas (x, y)
 // corresponden a la esquina superior izquierda de la caja de colisión
 // (en Qt el eje Y crece hacia abajo).
+//
+// Memoria: las entidades NO se crean ni se destruyen durante la partida. El Nivel
+// guarda arreglos de tamaño fijo y cada casilla se recicla: "activa == false" significa
+// casilla libre.
 class Entidades
 {
 protected:
@@ -20,6 +24,9 @@ public:
     virtual ~Entidades() = default;
 
     virtual void actualizar(double dt) = 0;
+
+    // Avanza con la velocidad (vx, vy). Si la entidad sale por completo por la izquierda
+    // de la pantalla se desactiva sola: su casilla queda libre para volver a usarse.
     void mover(double dt);
 
     bool colisionaCon(const Entidades *otra) const;
