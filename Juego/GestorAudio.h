@@ -11,8 +11,7 @@
 // No conoce las reglas del nivel; solo reacciona a lo que Nivel informa.
 //
 // Interruptor: el audio se puede activar/desactivar con setActivo(). Hoy el juego lo crea
-// siempre activo (ver AUDIO_ACTIVO en mainwindow.cpp); si más adelante se agrega una opción
-// "silenciar", basta con llamar a setActivo(false/true) desde donde se decida.
+// siempre activo; si más adelante se agrega una opción se espera agregar la opción "silenciar"
 class GestorAudio : public QObject
 {
     Q_OBJECT
@@ -36,11 +35,11 @@ private:
     enum class Musica { Ninguna, Nivel, Rapidin };
 
     QSoundEffect *sonidos[TOTAL_SONIDOS];
-    bool pendiente[TOTAL_SONIDOS];     // se pidió sonar mientras el archivo aún cargaba
+    bool pendiente[TOTAL_SONIDOS];
     qint64 pedidoEn[TOTAL_SONIDOS];
     QElapsedTimer reloj;
     bool activo;
-    Musica musicaActual;               // pista que debe sonar ahora (aunque el audio esté apagado)
+    Musica musicaActual;               // pista que debe sonar (aunque el audio esté apagado)
 
     void cargar(Sonido id, const char *archivo, double volumen, bool enBucle);
     void reproducir(Sonido id);
