@@ -10,9 +10,9 @@
 #include <QGraphicsLineItem>
 #include <QGraphicsPolygonItem>
 #include <QPointF>
-#include <QHash>
 #include <QList>
 #include <QPixmap>
+#include <QRectF>
 #include <QTimer>
 #include <QElapsedTimer>
 #include "Juego.h"
@@ -44,7 +44,7 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private slots:
-    void actualizarJuego(); // Un "tick" del temporizador (~60 FPS).
+    void actualizarJuego(); // Un "tick" del temporizador (60 FPS).
 
 private:
     Ui::MainWindow *ui;
@@ -62,17 +62,28 @@ private:
     QPixmap pxBotella, pxHueco, pxCaja, pxCono, pxLlanta, pxPremio, pxCorazon, pxPalmera;
 
     // Escenario.
+    QGraphicsRectItem *fondoVerdeBase;
+    QGraphicsRectItem *cieloSuperior;
+    QGraphicsRectItem *bermaSuperior;
+    QGraphicsRectItem *bermaInferior;
     QGraphicsPixmapItem *fondoA;
     QGraphicsPixmapItem *fondoB;
     QGraphicsPixmapItem *carreteraItem;
+    QPixmap teselaCarretera;
     QList<QGraphicsItem*> palmeras;
     QList<QGraphicsLineItem*> lineasVelocidad;
     double anchoFondoCompuesto;
+    double carreteraBaseX;
+    QRectF areaVisibleScene;
 
     // Personajes.
     QGraphicsItem *jugadorItem;
     QGraphicsItem *ancianoItem;
-    QHash<const Entidades*, QGraphicsItem*> itemsEntidades;
+
+    // Sprites de las entidades: UNO POR CASILLA del Nivel (mismo índice que los arreglos
+    // estaticos[] y armas[]). Se crean una sola vez; una casilla libre solo oculta su sprite.
+    QGraphicsPixmapItem *graficosEstaticos[Nivel::MAX_ESTATICOS];
+    QGraphicsPixmapItem *graficosArmas[Nivel::MAX_ARMAS];
 
     // HUD.
     QGraphicsRectItem *panelHud;
@@ -93,6 +104,18 @@ private:
     QGraphicsTextItem *textoDetalle;
     QGraphicsTextItem *textoReiniciar;
 
+    // Últimos valores dibujados: los textos y las barras solo se rehacen cuando cambian
+    // (rehacer un QGraphicsTextItem obliga a Qt a volver a maquetar el texto).
+    int segundosMostrados = -1;
+    int anchoBarraMostrado = -1;
+    int estadoMostrado = -1;
+    int decimasRapidinMostradas = -1;
+    int cuentaMostrada = -1;
+    int vidasMostradas = -1;
+    double bordeIzqMostrado = 1.0e9;
+    double bordeDerMostrado = 1.0e9;
+    bool resultadoVisible = false;
+
     // Animación.
     double scrollRuta;
     double tiempoAnimacion;
@@ -101,8 +124,11 @@ private:
     int estadoAnterior;
     double tiempoImpacto;
     bool efectoChoqueActivo;
-    struct EstrellaVisual { QGraphicsPolygonItem *item; QPointF velocidad; double vida; };
-    QList<EstrellaVisual> estrellasColision;
+
+    // Estrellas del choque: arreglo fijo, creadas una vez y recicladas (vida <= 0 = libre).
+    static constexpr int MAX_ESTRELLAS = 24;
+    struct EstrellaVisual { QGraphicsPolygonItem *item = nullptr; QPointF velocidad; double vida = 0.0; };
+    EstrellaVisual estrellas[MAX_ESTRELLAS];
 
     void cargarRecursos();
     void construirEscenario();
@@ -118,7 +144,7 @@ private:
     void centrarTexto(QGraphicsTextItem *texto, double centroX, double y);
 
     void actualizarEscenario(double dt);
-    void sincronizarJugador();
+    void sincronizarJugador(double dt = 0.0);
     void sincronizarAnciano();
     void sincronizarEntidades();
     void sincronizarHud();
@@ -126,7 +152,10 @@ private:
     void crearEfectoColision(bool fatal);
     void actualizarEfectosColision(double dt);
     void ajustarVista();
+    void adaptarEscenarioAVista();
     QPixmap cargarSpriteRecortado(const QString &ruta, int ancho, int alto) const;
+    const QPixmap &pixmapDeEstatico(TipoObjetoEstatico tipo) const;
+    const QPixmap &pixmapDeArma(TipoArma tipo) const;
 };
 
 #endif

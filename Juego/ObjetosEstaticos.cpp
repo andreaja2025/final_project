@@ -3,11 +3,43 @@
 
 #include <algorithm>
 
-ObjetosEstaticos::ObjetosEstaticos(
-    double x, double y, double ancho, double alto,
-    TipoObjetoEstatico tipo, int carril)
-    : Entidades(x, y, ancho, alto), tipo(tipo), carril(carril)
+ObjetosEstaticos::ObjetosEstaticos()
+    : Entidades(0.0, 0.0, 0.0, 0.0), tipo(CAJA), carril(0),
+    premioRapidin(false), duracionEfect(0.0), recogido(false)
 {
+    activa = false;
+}
+
+void ObjetosEstaticos::crearObstaculo(double x, double y, double ancho, double alto,
+                                      TipoObjetoEstatico tipo, int carril)
+{
+    this->x = x;
+    this->y = y;
+    this->ancho = ancho;
+    this->alto = alto;
+    vx = vy = 0.0;
+    this->tipo = tipo;
+    this->carril = carril;
+    premioRapidin = false;
+    duracionEfect = 0.0;
+    recogido = false;
+    activa = true;
+}
+
+void ObjetosEstaticos::crearPremio(double x, double y, double ancho, double alto,
+                                   bool premioRapidin, double duracionEfect)
+{
+    this->x = x;
+    this->y = y;
+    this->ancho = ancho;
+    this->alto = alto;
+    vx = vy = 0.0;
+    tipo = PREMIO;
+    carril = -1;
+    this->premioRapidin = premioRapidin;
+    this->duracionEfect = duracionEfect;
+    recogido = false;
+    activa = true;
 }
 
 void ObjetosEstaticos::actualizar(double dt)
@@ -16,12 +48,34 @@ void ObjetosEstaticos::actualizar(double dt)
         mover(dt);
 }
 
-// Efecto: choque inelástico contra el personaje (lo hace retroceder).
+// Cada tipo aplica su propio efecto sobre el personaje.
 void ObjetosEstaticos::colocarefect(PersonajePrincipal *jugador)
 {
     if (!jugador || !activa)
         return;
 
+    if (tipo == PREMIO)
+        aplicarPremio(jugador);
+    else
+        aplicarChoque(jugador);
+}
+
+// Efecto del premio: el personaje pasa a "rapidín" y el premio desaparece (casilla libre).
+void ObjetosEstaticos::aplicarPremio(PersonajePrincipal *jugador)
+{
+    if (recogido)
+        return;
+
+    if (premioRapidin)
+        jugador->activarRapidin(duracionEfect);
+
+    recogido = true;
+    desactivar();
+}
+
+// Efecto del obstáculo estatico: choque inelástico contra el personaje (lo hace retroceder).
+void ObjetosEstaticos::aplicarChoque(PersonajePrincipal *jugador)
+{
     // Determinar el lado del objeto que recibió el impacto.
     const double solapeIzq = jugador->getX() + jugador->getAncho() - x;
     const double solapeDer = x + ancho - jugador->getX();
@@ -39,12 +93,7 @@ void ObjetosEstaticos::colocarefect(PersonajePrincipal *jugador)
     jugador->recibirImpacto(normalX, normalY, vx, vy, RESTITUCION, DURACION_IMPACTO);
 }
 
-TipoObjetoEstatico ObjetosEstaticos::getTipo() const
-{
-    return tipo;
-}
-
-int ObjetosEstaticos::getCarril() const
-{
-    return carril;
-}
+TipoObjetoEstatico ObjetosEstaticos::getTipo() const { return tipo; }
+int ObjetosEstaticos::getCarril() const { return carril; }
+bool ObjetosEstaticos::esPremio() const { return tipo == PREMIO; }
+bool ObjetosEstaticos::fueRecogido() const { return recogido; }

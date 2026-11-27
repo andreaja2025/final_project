@@ -1,10 +1,4 @@
 #include "Nivel.h"
-#include "PersonajePrincipal.h"
-#include "Anciano.h"
-#include "ObjetosArmas.h"
-#include "ObjetosEstaticos.h"
-#include "Premio.h"
-#include "Proyectil.h"
 
 #include <cmath>
 #include <algorithm>
@@ -19,11 +13,21 @@ constexpr double X_APARICION = 1350.0;       // Fuera de pantalla, a la derecha.
 constexpr double FACTOR_RAPIDIN_SCROLL = 1.6; // Velocidad del escenario con el premio.
 constexpr double FACTOR_RAPIDIN_TIEMPO = 1.5; // El trayecto "avanza" más rápido.
 constexpr double SEPARACION_MINIMA = 300.0;   // Entre un obstáculo y cualquier objeto nuevo.
+
+// Devuelve la primera casilla inactiva del arreglo, o nullptr si todas están en uso.
+template <class T>
+T *buscarLibre(T arreglo[], int cantidad)
+{
+    for (int i = 0; i < cantidad; ++i)
+        if (!arreglo[i].estaActiva())
+            return &arreglo[i];
+    return nullptr;
+}
 }
 
 Nivel::Nivel()
-    : jugador(nullptr), tiempo(0.0), estado(PREPARACION),
-    motivoDerrota(SIN_DERROTA), anciano(nullptr),
+    : tiempo(0.0), estado(PREPARACION),
+    motivoDerrota(SIN_DERROTA),
     tiempoPreparacion(3.0), duracionPreparacion(3.0),
     duracionNivel(60.0), velocidadBase(300.0), velocidadMaxima(420.0),
     distanciaRecorrida(0.0), colisionFatalEnCurso(false), tiempoRestanteImpacto(0.0),
@@ -31,7 +35,7 @@ Nivel::Nivel()
     distanciaHueco(0.0), separacionHueco(1400.0),
     distanciaPremio(0.0), separacionPremio(2000.0),
     generador(std::random_device{}()),
-    segundoCuentaAnterior(0), rapidinAnterior(false)
+    numEventos(0), segundoCuentaAnterior(0), rapidinAnterior(false)
 {
     centroCarril[0] = 390.0;
     centroCarril[1] = 510.0;
@@ -40,26 +44,16 @@ Nivel::Nivel()
 
 Nivel::~Nivel()
 {
-    delete jugador;
-    delete anciano;
-    descartarEntidades();
-}
-
-void Nivel::descartarEntidades()
-{
-    for (Entidades *e : entidades)
-        delete e;
-    entidades.clear();
+    // Nada que liberar: todo vive en arreglos del propio Nivel.
 }
 
 // Deja el nivel en un estado completamente limpio (se usa también para reiniciar).
 void Nivel::cargar()
 {
-    delete jugador;
-    delete anciano;
-    jugador = nullptr;
-    anciano = nullptr;
-    descartarEntidades();
+    for (int i = 0; i < MAX_ESTATICOS; ++i)
+        estaticos[i].desactivar();
+    for (int i = 0; i < MAX_ARMAS; ++i)
+        armas[i].liberar();
 
     tiempo = 0.0;
     tiempoPreparacion = duracionPreparacion;
@@ -74,7 +68,7 @@ void Nivel::cargar()
     separacionPremio = 2000.0;
     motivoDerrota = SIN_DERROTA;
     estado = PREPARACION;
-    eventos.clear();
+    numEventos = 0;
     segundoCuentaAnterior = 0;
     rapidinAnterior = false;
 
@@ -82,9 +76,9 @@ void Nivel::cargar()
     for (int i = 0; i < 3; ++i)
         yTop[i] = centroCarril[i] - ALTO_JUGADOR / 2.0;
 
-    jugador = new PersonajePrincipal(X_JUGADOR, yTop, ANCHO_JUGADOR, ALTO_JUGADOR);
-    anciano = new Anciano(X_ANCIANO, 0.0, 90.0, 100.0, 3.5);
-    anciano->setCentrosCarril(centroCarril);
+    jugador.reiniciar(X_JUGADOR, yTop, ANCHO_JUGADOR, ALTO_JUGADOR);
+    anciano.reiniciar(X_ANCIANO, 0.0, 90.0, 100.0, 3.5);
+    anciano.setCentrosCarril(centroCarril);
     registrarEvento(EVENTO_NIVEL_INICIADO);
 }
 
@@ -96,21 +90,21 @@ double Nivel::progreso() const
 double Nivel::velocidadActual() const
 {
     const double base = velocidadBase + (velocidadMaxima - velocidadBase) * progreso();
-    const bool rapidin = jugador && jugador->getEstado() == RAPIDIN;
+    const bool rapidin = jugador.getEstado() == RAPIDIN;
     return rapidin ? base * FACTOR_RAPIDIN_SCROLL : base;
 }
 
 void Nivel::registrarEvento(EventoJuego evento)
 {
-    eventos.push_back(evento);
+    if (numEventos < MAX_EVENTOS)
+        eventos[numEventos++] = evento;
 }
 
-std::vector<EventoJuego> Nivel::tomarEventos()
-{
-    std::vector<EventoJuego> pendientes;
-    pendientes.swap(eventos);
-    return pendientes;
-}
+int Nivel::getNumEventos() const { return numEventos; }
+
+EventoJuego Nivel::getEvento(int indice) const { return eventos[indice]; }
+
+void Nivel::limpiarEventos() { numEventos = 0; }
 
 // Envoltorio: ejecuta la actualización y avisa de los cambios de estado del nivel.
 void Nivel::actualizar(double dt)
@@ -136,8 +130,7 @@ void Nivel::procesarActualizacion(double dt)
     if (estado == PREPARACION) {
         // Cuenta regresiva: se puede cambiar de carril, pero no corre el
         // tiempo de supervivencia, no se generan objetos y no hay colisiones.
-        if (jugador)
-            jugador->actualizar(dt);
+        jugador.actualizar(dt);
         tiempoPreparacion -= dt;
         if (tiempoPreparacion <= 0.0) {
             tiempoPreparacion = 0.0;
@@ -159,42 +152,42 @@ void Nivel::procesarActualizacion(double dt)
 void Nivel::actualizarNivel1(double dt)
 {
     // Durante el impacto fatal se congela el mundo y solo avanza el retroceso
-    // físico de PersonajePrincipal. La derrota se declara al terminar la animación.
+    // físico de Terminator. La derrota se declara al terminar la animación.
     if (colisionFatalEnCurso) {
-        jugador->actualizar(dt);
+        jugador.actualizar(dt);
         tiempoRestanteImpacto -= dt;
         if (tiempoRestanteImpacto <= 0.0) {
             colisionFatalEnCurso = false;
-            jugador->morir();
+            jugador.morir();
             motivoDerrota = OBSTACULO_ESTATICO;
             estado = PERDIDO;
         }
         return;
     }
 
-    if (!jugador || !anciano || !jugador->estaActiva()) {
+    if (!jugador.estaActiva()) {
         estado = PERDIDO;
         return;
     }
 
-    jugador->actualizar(dt);
+    jugador.actualizar(dt);
 
-    const bool rapidinAhora = jugador->getEstado() == RAPIDIN;
+    const bool rapidinAhora = jugador.getEstado() == RAPIDIN;
     if (rapidinAnterior && !rapidinAhora)
         registrarEvento(EVENTO_RAPIDIN_FIN);
     rapidinAnterior = rapidinAhora;
 
     const double velocidad = velocidadActual();
-    const bool rapidin = jugador->getEstado() == RAPIDIN;
+    const bool rapidin = jugador.getEstado() == RAPIDIN;
 
     distanciaRecorrida += velocidad * dt;
     tiempo += dt * (rapidin ? FACTOR_RAPIDIN_TIEMPO : 1.0);
 
     // Dificultad creciente: el Ángel lanza más seguido y con arcos más rápidos.
-    anciano->setTiempoEntreLanzamiento(3.5 - 0.9 * progreso());
-    anciano->setTiempoVuelo(1.25 - 0.30 * progreso());
-    anciano->percibir(jugador->getCarril(), dt);
-    anciano->actualizar(dt);
+    anciano.setTiempoEntreLanzamiento(3.5 - 0.9 * progreso());
+    anciano.setTiempoVuelo(1.25 - 0.30 * progreso());
+    anciano.percibir(jugador.getCarril(), dt);
+    anciano.actualizar(dt);
 
     distanciaObstaculo += velocidad * dt;
     distanciaHueco += velocidad * dt;
@@ -207,22 +200,28 @@ void Nivel::actualizarNivel1(double dt)
     if (distanciaPremio >= separacionPremio)
         generarPremio();
 
-    if (anciano->listoParaLanzar())
+    if (anciano.listoParaLanzar())
         lanzarBotella();
 
-    for (Entidades *e : entidades) {
-        if (!e || !e->estaActiva())
+    // Lo que viaja con la carretera recibe su velocidad; las botellas vuelan solas (parábola).
+    for (int i = 0; i < MAX_ESTATICOS; ++i) {
+        ObjetosEstaticos &objeto = estaticos[i];
+        if (!objeto.estaActiva())
             continue;
-
-        // Las botellas vuelan solas (parábola); lo demás viaja con la carretera.
-        if (!dynamic_cast<Proyectil*>(e))
-            e->setVelocidad(-velocidad, 0.0);
-
-        e->actualizar(dt);
+        objeto.setVelocidad(-velocidad, 0.0);
+        objeto.actualizar(dt);
+    }
+    for (int i = 0; i < MAX_ARMAS; ++i) {
+        ObjetosArmas &arma = armas[i];
+        if (!arma.estaActiva())
+            continue;
+        if (!arma.esBotella())
+            arma.setVelocidad(-velocidad, 0.0);
+        arma.actualizar(dt);
     }
 
     verificarColisiones();
-    limpiarInactivas();
+    revisarBotellas();
 
     // Si comenzó el retroceso fatal, no se continúa avanzando el mundo.
     if (colisionFatalEnCurso)
@@ -237,17 +236,17 @@ void Nivel::actualizarNivel1(double dt)
 
 void Nivel::entradas(int tecla)
 {
-    if ((estado != PREPARACION && estado != JUGANDO) || !jugador)
+    if (estado != PREPARACION && estado != JUGANDO)
         return;
 
-    const int carrilAntes = jugador->getCarril();
+    const int carrilAntes = jugador.getCarril();
 
     if (tecla == 'W' || tecla == 'w')
-        jugador->CambiarDeCarril(-1);   // Carril superior.
+        jugador.CambiarDeCarril(-1);   // Carril superior.
     else if (tecla == 'S' || tecla == 's')
-        jugador->CambiarDeCarril(1);    // Carril inferior.
+        jugador.CambiarDeCarril(1);    // Carril inferior.
 
-    if (jugador->getCarril() != carrilAntes)
+    if (jugador.getCarril() != carrilAntes)
         registrarEvento(EVENTO_CAMBIO_CARRIL);
 }
 
@@ -276,15 +275,26 @@ int Nivel::elegirCarrilLibre(bool exigirSinObstaculoCerca)
 {
     bool ocupado[3] = {false, false, false};
 
-    for (const Entidades *e : entidades) {
-        if (!e || !e->estaActiva() || dynamic_cast<const Proyectil*>(e))
+    for (int i = 0; i < MAX_ESTATICOS; ++i) {
+        const ObjetosEstaticos &objeto = estaticos[i];
+        if (!objeto.estaActiva())
             continue;
-        if (e->getX() < X_APARICION - SEPARACION_MINIMA)
+        if (objeto.getX() < X_APARICION - SEPARACION_MINIMA)
             continue;                                   // Ya está lejos del punto de aparición.
 
-        ocupado[carrilDe(e)] = true;
-        if (exigirSinObstaculoCerca && dynamic_cast<const ObjetosEstaticos*>(e))
+        ocupado[carrilDe(&objeto)] = true;
+        if (exigirSinObstaculoCerca && !objeto.esPremio())
             return -1;                                  // Nunca dos obstáculos fatales juntos.
+    }
+
+    for (int i = 0; i < MAX_ARMAS; ++i) {
+        const ObjetosArmas &arma = armas[i];
+        if (!arma.estaActiva() || arma.esBotella())
+            continue;
+        if (arma.getX() < X_APARICION - SEPARACION_MINIMA)
+            continue;
+
+        ocupado[carrilDe(&arma)] = true;
     }
 
     int libres[3];
@@ -304,13 +314,17 @@ void Nivel::generarObstaculo()
     if (carril < 0)
         return;                         // Se reintenta en el siguiente ciclo.
 
-    const auto tipo = static_cast<TipoObjetoEstatico>(numeroAleatorio(0, 2));
+    ObjetosEstaticos *casilla = buscarLibre(estaticos, MAX_ESTATICOS);
+    if (!casilla)
+        return;                         // Sin casilla libre: también se reintenta.
+
+    const auto tipo = static_cast<TipoObjetoEstatico>(numeroAleatorio(0, 2));   // CAJA, CONO o LLANTA
     double ancho = 54.0, alto = 50.0;
     if (tipo == CONO) { ancho = 36.0; alto = 56.0; }
     else if (tipo == LLANTA) { ancho = 52.0; alto = 52.0; }
 
-    entidades.push_back(new ObjetosEstaticos(
-        X_APARICION, centroCarril[carril] - alto / 2.0, ancho, alto, tipo, carril));
+    casilla->crearObstaculo(X_APARICION, centroCarril[carril] - alto / 2.0,
+                            ancho, alto, tipo, carril);
 
     distanciaObstaculo = 0.0;
     separacionObstaculo = numeroAleatorio(760, 1000);
@@ -322,9 +336,12 @@ void Nivel::generarHueco()
     if (carril < 0)
         return;
 
+    ObjetosArmas *casilla = buscarLibre(armas, MAX_ARMAS);
+    if (!casilla)
+        return;
+
     const double ancho = 76.0, alto = 28.0;
-    entidades.push_back(new ObjetosArmas(
-        X_APARICION, centroCarril[carril] - alto / 2.0, ancho, alto));
+    casilla->crearHueco(X_APARICION, centroCarril[carril] - alto / 2.0, ancho, alto);
 
     distanciaHueco = 0.0;
     separacionHueco = numeroAleatorio(1900, 2500);
@@ -336,9 +353,12 @@ void Nivel::generarPremio()
     if (carril < 0)
         return;
 
+    ObjetosEstaticos *casilla = buscarLibre(estaticos, MAX_ESTATICOS);
+    if (!casilla)
+        return;
+
     const double lado = 40.0;
-    entidades.push_back(new Premio(
-        X_APARICION, centroCarril[carril] - lado / 2.0, lado, lado));
+    casilla->crearPremio(X_APARICION, centroCarril[carril] - lado / 2.0, lado, lado);
 
     distanciaPremio = 0.0;
     separacionPremio = numeroAleatorio(2200, 3000);
@@ -346,33 +366,28 @@ void Nivel::generarPremio()
 
 void Nivel::lanzarBotella()
 {
-    if (!jugador || !anciano)
-        return;
+    ObjetosArmas *casilla = buscarLibre(armas, MAX_ARMAS);
+    if (!casilla)
+        return;                         // Sin casilla libre: se reintenta en el siguiente ciclo.
 
     // El Ángel apunta al carril que él decidió (puede anticiparse al jugador).
-    const double objetivoX = jugador->getCentroX();
-    const double objetivoY = centroCarril[anciano->getCarrilObjetivo()];
+    const double objetivoX = jugador.getCentroX();
+    const double objetivoY = centroCarril[anciano.getCarrilObjetivo()];
 
-    Proyectil *botella = anciano->lanzarBotella(objetivoX, objetivoY);
-    if (botella) {
-        entidades.push_back(botella);
+    if (anciano.lanzarBotella(casilla, objetivoX, objetivoY))
         registrarEvento(EVENTO_LANZAMIENTO_BOTELLA);
-    }
 }
 
 void Nivel::verificarColisiones()
 {
-    if (!jugador)
-        return;
-
-    // 1) Objetos estáticos: derrota inmediata (no es pérdida de vida).
-    for (Entidades *e : entidades) {
-        auto *objeto = dynamic_cast<ObjetosEstaticos*>(e);
-        if (!objeto || !objeto->estaActiva())
+    // 1) Obstáculos fijos: derrota inmediata (no es pérdida de vida).
+    for (int i = 0; i < MAX_ESTATICOS; ++i) {
+        ObjetosEstaticos &objeto = estaticos[i];
+        if (!objeto.estaActiva() || objeto.esPremio())
             continue;
-        if (jugador->colisionaCon(objeto)) {
+        if (jugador.colisionaCon(&objeto)) {
             // El objeto aplica su efecto: choque inelástico que hace retroceder al personaje.
-            objeto->colocarefect(jugador);
+            objeto.colocarefect(&jugador);
             colisionFatalEnCurso = true;
             tiempoRestanteImpacto = ObjetosEstaticos::DURACION_IMPACTO;
             registrarEvento(EVENTO_CHOQUE_FATAL);
@@ -381,25 +396,33 @@ void Nivel::verificarColisiones()
         }
     }
 
-    // 2) Botellas y huecos (quitan una vida) y premios.
-    for (Entidades *e : entidades) {
-        if (!e || !e->estaActiva() || !jugador->colisionaCon(e))
+    // 2) Premios.
+    for (int i = 0; i < MAX_ESTATICOS; ++i) {
+        ObjetosEstaticos &objeto = estaticos[i];
+        if (!objeto.estaActiva() || !objeto.esPremio())
             continue;
-
-        if (auto *botella = dynamic_cast<Proyectil*>(e)) {
-            botella->colocarefect(jugador);      // Se aplica una sola vez y se desactiva.
-            if (anciano)
-                anciano->registrarResultado(botella->getCarrilObjetivo(), true);
-            registrarEvento(EVENTO_IMPACTO_BOTELLA);
-        } else if (auto *hueco = dynamic_cast<ObjetosArmas*>(e)) {
-            hueco->colocarefect(jugador);
-            registrarEvento(EVENTO_CAIDA_HUECO);
-        } else if (auto *premio = dynamic_cast<Premio*>(e)) {
-            premio->colocarefect(jugador);
+        if (jugador.colisionaCon(&objeto)) {
+            objeto.colocarefect(&jugador);
             registrarEvento(EVENTO_PREMIO);
         }
+    }
 
-        if (!jugador->estaActiva()) {
+    // 3) Botellas y huecos (quitan una vida).
+    for (int i = 0; i < MAX_ARMAS; ++i) {
+        ObjetosArmas &arma = armas[i];
+        if (!arma.estaActiva() || !jugador.colisionaCon(&arma))
+            continue;
+
+        const bool botella = arma.esBotella();
+        arma.colocarefect(&jugador);         // Se aplica una sola vez y se desactiva.
+        if (botella) {
+            anciano.registrarResultado(arma.getCarrilObjetivo(), true);
+            registrarEvento(EVENTO_IMPACTO_BOTELLA);
+        } else {
+            registrarEvento(EVENTO_CAIDA_HUECO);
+        }
+
+        if (!jugador.estaActiva()) {
             motivoDerrota = VIDAS_AGOTADAS;
             estado = PERDIDO;
             return;
@@ -407,31 +430,21 @@ void Nivel::verificarColisiones()
     }
 }
 
-void Nivel::limpiarInactivas()
+// Una botella que termina su trayectoria sin golpear es un fallo del Ángel. Se cuenta una
+// sola vez, cuando su casilla queda libre (reemplaza a la antigua limpieza con delete).
+void Nivel::revisarBotellas()
 {
-    std::vector<Entidades*> vivas;
-    vivas.reserve(entidades.size());
-
-    for (Entidades *e : entidades) {
-        if (!e)
+    for (int i = 0; i < MAX_ARMAS; ++i) {
+        ObjetosArmas &arma = armas[i];
+        if (arma.estaActiva() || !arma.resultadoPorRegistrar())
             continue;
-        if (e->estaActiva()) {
-            vivas.push_back(e);
-            continue;
-        }
 
-        // Una botella que termina su trayectoria sin golpear es un fallo del Ángel.
-        if (auto *botella = dynamic_cast<Proyectil*>(e)) {
-            if (!botella->huboImpacto()) {
-                if (anciano)
-                    anciano->registrarResultado(botella->getCarrilObjetivo(), false);
-                registrarEvento(EVENTO_BOTELLA_FALLADA);
-            }
+        arma.resultadoRegistrado();
+        if (!arma.huboImpacto()) {
+            anciano.registrarResultado(arma.getCarrilObjetivo(), false);
+            registrarEvento(EVENTO_BOTELLA_FALLADA);
         }
-        delete e;
     }
-
-    entidades.swap(vivas);
 }
 
 bool Nivel::completado() const { return estado == COMPLETADO; }
@@ -447,6 +460,9 @@ double Nivel::getCentroCarril(int carril) const
 {
     return (carril >= 0 && carril <= 2) ? centroCarril[carril] : centroCarril[1];
 }
-PersonajePrincipal *Nivel::getJugador() const { return jugador; }
-Anciano *Nivel::getAnciano() const { return anciano; }
-const std::vector<Entidades*>& Nivel::getEntidades() const { return entidades; }
+PersonajePrincipal *Nivel::getJugador() { return &jugador; }
+const PersonajePrincipal *Nivel::getJugador() const { return &jugador; }
+Anciano *Nivel::getAnciano() { return &anciano; }
+const Anciano *Nivel::getAnciano() const { return &anciano; }
+const ObjetosEstaticos &Nivel::getEstatico(int indice) const { return estaticos[indice]; }
+const ObjetosArmas &Nivel::getArma(int indice) const { return armas[indice]; }
